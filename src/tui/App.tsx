@@ -9,9 +9,11 @@ import { CommandBar } from "./components/CommandBar.js";
 import { PromptOverlay } from "./components/PromptOverlay.js";
 import { Dashboard } from "./screens/Dashboard.js";
 import { KeyManager } from "./screens/KeyManager.js";
+import { SetupWizard } from "./screens/SetupWizard.js";
+import { AgentScreen } from "./screens/AgentScreen.js";
 import { HelpScreen } from "./screens/HelpScreen.js";
 
-const SCREEN_KEYS: Record<string, Screen> = { "1": "dashboard", "2": "keys" };
+const SCREEN_KEYS: Record<string, Screen> = { "1": "dashboard", "2": "keys", "3": "setup", "4": "agent" };
 
 function Shell() {
   const { state, dispatch } = useStore();
@@ -24,7 +26,8 @@ function Shell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Zone arbitration: only active when the screen owns focus and nothing is running.
+  // Zone arbitration: only when the screen owns focus, nothing is running, and
+  // the active screen has no text inputs of its own (the wizard needs raw chars).
   useInput(
     (input, key) => {
       if (input === "/" || input === ":" || (key.ctrl && input === "k")) {
@@ -37,7 +40,7 @@ function Shell() {
       const screen = SCREEN_KEYS[input];
       if (screen) dispatch({ type: "navigate", screen });
     },
-    { isActive: state.focusZone === "screen" && !state.prompt && !state.busy },
+    { isActive: state.focusZone === "screen" && !state.prompt && !state.busy && state.screen !== "setup" },
   );
 
   return (
@@ -46,13 +49,15 @@ function Shell() {
       <Box flexDirection="column" flexGrow={1} overflow="hidden">
         {state.screen === "dashboard" && <Dashboard />}
         {state.screen === "keys" && <KeyManager />}
+        {state.screen === "setup" && <SetupWizard key={JSON.stringify(state.setupPrefill)} />}
+        {state.screen === "agent" && <AgentScreen />}
         {state.screen === "help" && <HelpScreen />}
       </Box>
       <Transcript />
       <PromptOverlay />
       <CommandBar />
       <Box paddingX={1}>
-        <Text dimColor>/ command · 1 dashboard · 2 keys · ? help · ctrl+l clear · q quit</Text>
+        <Text dimColor>/ command · 1 dashboard · 2 keys · 3 setup · 4 agent · ? help · ctrl+l clear · q quit</Text>
       </Box>
     </Box>
   );

@@ -24,15 +24,18 @@ export function Dashboard() {
       <Select
         isDisabled={!active}
         options={[
-          { label: "➕ Setup a new SSH key", value: "setup" },
-          { label: "🗂  Manage keys", value: "keys" },
+          { label: "➕ Setup a new SSH key", value: "screen:setup" },
+          { label: "🗂  Manage keys", value: "screen:keys" },
           { label: "🔌 Test all connections", value: "test --all" },
-          { label: "❓ Help", value: "help" },
+          { label: "🔑 SSH agent", value: "screen:agent" },
+          { label: "❓ Help", value: "screen:help" },
         ]}
         onChange={(value) => {
-          if (value === "keys") dispatch({ type: "navigate", screen: "keys" });
-          else if (value === "help") dispatch({ type: "navigate", screen: "help" });
-          else void runLine(value);
+          if (value.startsWith("screen:")) {
+            dispatch({ type: "navigate", screen: value.slice("screen:".length) as never });
+          } else {
+            void runLine(value);
+          }
         }}
       />
     </Box>

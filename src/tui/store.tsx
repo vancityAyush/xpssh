@@ -1,8 +1,9 @@
 import { createContext, useContext, useReducer, type Dispatch, type ReactNode } from "react";
 import type { CommandEvent, SelectChoice } from "../commands/types.js";
 import type { ProfileRow } from "../commands/list.js";
+import type { SetupArgs } from "../commands/setup.js";
 
-export type Screen = "dashboard" | "keys" | "help";
+export type Screen = "dashboard" | "keys" | "setup" | "agent" | "help";
 export type FocusZone = "screen" | "bar";
 
 /** A prompt a running command is waiting on; PromptOverlay renders it and calls resolve. */
@@ -20,6 +21,8 @@ export interface AppState {
   focusZone: FocusZone;
   history: string[];
   prompt: PendingPrompt | null;
+  /** args carried into the SetupWizard when a `setup …` command line opens it */
+  setupPrefill: SetupArgs | null;
 }
 
 export type Action =
@@ -30,7 +33,8 @@ export type Action =
   | { type: "set-busy"; busy: boolean }
   | { type: "set-focus"; zone: FocusZone }
   | { type: "push-history"; line: string }
-  | { type: "set-prompt"; prompt: PendingPrompt | null };
+  | { type: "set-prompt"; prompt: PendingPrompt | null }
+  | { type: "set-setup-prefill"; args: SetupArgs | null };
 
 const MAX_TRANSCRIPT = 200;
 
@@ -42,6 +46,7 @@ export const initialState: AppState = {
   focusZone: "screen",
   history: [],
   prompt: null,
+  setupPrefill: null,
 };
 
 export function reducer(state: AppState, action: Action): AppState {
@@ -62,6 +67,8 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...state, history: [...state.history, action.line].slice(-100) };
     case "set-prompt":
       return { ...state, prompt: action.prompt };
+    case "set-setup-prefill":
+      return { ...state, setupPrefill: action.args };
   }
 }
 

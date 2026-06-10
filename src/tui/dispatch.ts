@@ -5,16 +5,13 @@ import { resolveOs } from "../platform/os.js";
 import { tokenize } from "../cli/tokenize.js";
 import { resolveCommand, hasYesFlag } from "../cli/parse.js";
 import { gatherProfileRows } from "../commands/list.js";
-import { UsageError, type CommandContext, type SelectChoice } from "../commands/types.js";
+import { UsageError, type CommandContext, type CommandEvent, type SelectChoice } from "../commands/types.js";
+import type { SetupArgs } from "../commands/setup.js";
 import { useStore, type PendingPrompt } from "./store.js";
 
 /** Result lines printed to normal stdout after the alt-screen closes. */
 export const sessionLog: string[] = [];
 
-/**
- * Hook giving screens and the command bar one entry point that runs the exact
- * CLI command layer, with prompts routed to the PromptOverlay.
- */
 export function useCommandDispatch() {
   const { state, dispatch } = useStore();
 
@@ -23,12 +20,12 @@ export function useCommandDispatch() {
     dispatch({ type: "set-profiles", profiles: rows });
   }, [dispatch]);
 
-  const runLine = useCallback(
-    async (line: string) => {
-      const tokens = tokenize(line);
-      if (tokens.length === 0) return;
-      dispatch({ type: "push-history", line });
-
+  /**
+   * Build a CommandContext whose prompts suspend into the PromptOverlay.
+   * `onEvent` lets callers (the wizard's StepList) observe events besides the transcript.
+   */
+  const makeContext = useCallback(
+    (yes: boolean, onEvent?: (event: CommandEvent) => void): CommandContext => {
       const ask = <T,>(build: (resolve: (value: T) => void) => PendingPrompt): Promise<T> =>
         new Promise<T>((resolve) => {
           dispatch({
@@ -40,16 +37,19 @@ export function useCommandDispatch() {
           });
         });
 
-      const ctx: CommandContext = {
+      return {
         exec: realExec,
         fetch: globalThis.fetch,
         env: process.env,
         paths: resolvePaths(process.env),
         os: resolveOs(),
-        yes: hasYesFlag(tokens),
-        emit: (event) => dispatch({ type: "append-event", event }),
+        yes,
+        emit: (event) => {
+          dispatch({ type: "append-event", event });
+          onEvent?.(event);
+        },
         confirm: (message) =>
-          hasYesFlag(tokens) ? Promise.resolve(true) : ask((resolve) => ({ kind: "confirm", message, resolve })),
+          yes ? Promise.resolve(true) : ask((resolve) => ({ kind: "confirm", message, resolve })),
         promptText: (message, options) =>
           ask((resolve) => ({ kind: "text", message, defaultValue: options?.defaultValue, resolve })),
         promptSecret: (message) => ask((resolve) => ({ kind: "secret", message, resolve })),
@@ -61,12 +61,38 @@ export function useCommandDispatch() {
             resolve: resolve as (value: unknown) => void,
           })),
       };
+    },
+    [dispatch],
+  );
 
-      dispatch({ type: "set-busy", busy: true });
+  /** Run a command line through the exact CLI command layer. */
+  const runLine = useCallback(
+    async (line: string) => {
+      const tokens = tokenize(line);
+      if (tokens.length === 0) return;
+      dispatch({ type: "push-history", line });
       dispatch({ type: "append-event", event: { type: "info", text: `❯ ${line}` } });
+
+      let resolved: ReturnType<typeof resolveCommand>;
       try {
-        const { def, args } = resolveCommand(tokens);
-        const result = await def.run(args, ctx);
+        resolved = resolveCommand(tokens);
+      } catch (err) {
+        dispatch({ type: "append-event", event: { type: "error", text: (err as Error).message } });
+        return;
+      }
+
+      // The Claude Code feel: an under-specified setup drops you into the
+      // wizard prefilled with whatever was parsed, instead of raw prompts.
+      if (resolved.def.name === "setup" && !hasYesFlag(tokens)) {
+        dispatch({ type: "set-setup-prefill", args: resolved.args as SetupArgs });
+        dispatch({ type: "navigate", screen: "setup" });
+        return;
+      }
+
+      const ctx = makeContext(hasYesFlag(tokens));
+      dispatch({ type: "set-busy", busy: true });
+      try {
+        const result = await resolved.def.run(resolved.args, ctx);
         if (result.message) {
           dispatch({
             type: "append-event",
@@ -83,8 +109,8 @@ export function useCommandDispatch() {
         await refreshProfiles();
       }
     },
-    [dispatch, refreshProfiles],
+    [dispatch, makeContext, refreshProfiles],
   );
 
-  return { runLine, refreshProfiles, busy: state.busy };
+  return { runLine, refreshProfiles, makeContext, busy: state.busy };
 }
