@@ -14,7 +14,7 @@
   },
   "scripts": {
     "dev": "bun run src/index.tsx",
-    "build": "bun build src/index.tsx --target node --outdir dist --banner '#!/usr/bin/env node'",
+    "build": "bun build src/index.tsx --target node --outdir dist --packages external",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "bun run typecheck && bun run test && bun run build"
