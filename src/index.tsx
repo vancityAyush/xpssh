@@ -10,9 +10,15 @@ if (args.includes("--version") || args.includes("-v")) {
 
 if (args[0] === "ui" || (args.length === 0 && process.stdout.isTTY)) {
   const { render } = await import("ink");
-  const { Spike } = await import("./tui/Spike.js");
-  const app = render(<Spike />, { alternateScreen: true });
+  const { App } = await import("./tui/App.js");
+  const { sessionLog } = await import("./tui/dispatch.js");
+  const app = render(<App />, { alternateScreen: true });
   await app.waitUntilExit();
+  // the alt screen vanished — persist what happened into normal scrollback
+  if (sessionLog.length > 0) {
+    console.log("xpssh session:");
+    for (const line of sessionLog) console.log(`  ${line}`);
+  }
   process.exit(0);
 }
 

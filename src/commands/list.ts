@@ -1,11 +1,33 @@
 import { access } from "node:fs/promises";
 import { defineCommand } from "./types.js";
 import { loadManifest } from "../core/manifest.js";
-import { clonePrefix } from "../core/profile.js";
-import { expandTilde } from "../platform/paths.js";
+import { clonePrefix, type Profile } from "../core/profile.js";
+import { expandTilde, type Paths } from "../platform/paths.js";
 
 interface ListArgs {
   json: boolean;
+}
+
+export interface ProfileRow extends Profile {
+  keyExists: boolean;
+  clonePrefix: string;
+}
+
+/** Profiles enriched with liveness — shared by the CLI list output and the TUI dashboard. */
+export async function gatherProfileRows(paths: Paths): Promise<ProfileRow[]> {
+  const manifest = await loadManifest(paths.manifest);
+  return Promise.all(
+    manifest.profiles.map(async (p) => {
+      let keyExists = false;
+      try {
+        await access(expandTilde(p.keyPath, paths.home));
+        keyExists = true;
+      } catch {
+        // missing key file
+      }
+      return { ...p, keyExists, clonePrefix: clonePrefix(p) };
+    }),
+  );
 }
 
 export const listCommand = defineCommand<ListArgs>({
@@ -18,27 +40,14 @@ export const listCommand = defineCommand<ListArgs>({
     return { json: values["json"] === true };
   },
   async run(args, ctx) {
-    const manifest = await loadManifest(ctx.paths.manifest);
-    if (manifest.profiles.length === 0) {
+    const rows = await gatherProfileRows(ctx.paths);
+    if (rows.length === 0) {
       if (args.json) {
         ctx.emit({ type: "info", text: JSON.stringify({ profiles: [] }) });
         return { ok: true };
       }
       return { ok: true, message: "No profiles yet — run `xpssh setup <provider>` to create one" };
     }
-
-    const rows = await Promise.all(
-      manifest.profiles.map(async (p) => {
-        let keyExists = false;
-        try {
-          await access(expandTilde(p.keyPath, ctx.paths.home));
-          keyExists = true;
-        } catch {
-          // missing key file
-        }
-        return { ...p, keyExists, clonePrefix: clonePrefix(p) };
-      }),
-    );
 
     if (args.json) {
       ctx.emit({ type: "info", text: JSON.stringify({ profiles: rows }, null, 2) });
