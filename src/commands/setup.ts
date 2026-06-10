@@ -1,4 +1,5 @@
 import { access } from "node:fs/promises";
+import { hostname } from "node:os";
 import { defineCommand, UsageError, type CommandContext } from "./types.js";
 import { getProvider, PROVIDERS, type KeyType, type Provider } from "../core/providers/index.js";
 import {
@@ -16,6 +17,9 @@ import { generateKeyPair, readPublicKey } from "../services/keygen.js";
 import { copyToClipboard } from "../services/clipboard.js";
 import { openInBrowser } from "../services/browser.js";
 import { testConnection } from "../services/sshTest.js";
+import { addKeyToAgent, ensureAgentRunning } from "../services/agent.js";
+import { linkGitIdentity } from "../services/gitconfig.js";
+import { uploadKey } from "../services/api.js";
 import { expandTilde } from "../platform/paths.js";
 
 export interface SetupArgs {
@@ -26,7 +30,12 @@ export interface SetupArgs {
   default?: boolean;
   noBrowser: boolean;
   noClipboard: boolean;
+  noAgent: boolean;
   force: boolean;
+  /** API token for direct upload (otherwise clipboard+browser) */
+  token?: string;
+  /** directory to bind to this identity via git includeIf */
+  dir?: string;
 }
 
 /** Fully-resolved inputs for the pipeline; the wizard fills this through its own UI. */
@@ -42,7 +51,10 @@ export interface SetupPlan {
   keyPath: string;
   noBrowser: boolean;
   noClipboard: boolean;
+  noAgent: boolean;
   force: boolean;
+  token?: string;
+  dir?: string;
 }
 
 export async function resolveSetupPlan(args: SetupArgs, ctx: CommandContext): Promise<SetupPlan> {
@@ -89,6 +101,8 @@ export async function resolveSetupPlan(args: SetupArgs, ctx: CommandContext): Pr
 
   const keyType = args.keyType ?? provider.keyType;
   const profileId = deriveProfileId(provider.id, name);
+  // token: explicit flag wins, then the provider's env var
+  const token = args.token ?? (provider.api ? ctx.env[provider.api.tokenEnvVar] : undefined);
   return {
     provider,
     name,
@@ -100,7 +114,10 @@ export async function resolveSetupPlan(args: SetupArgs, ctx: CommandContext): Pr
     keyPath: deriveKeyPath(provider.id, name),
     noBrowser: args.noBrowser,
     noClipboard: args.noClipboard,
+    noAgent: args.noAgent,
     force: args.force,
+    token,
+    dir: args.dir,
   };
 }
 
@@ -155,6 +172,28 @@ export const setupSteps: SetupStep[] = [
     },
   },
   {
+    id: "add-to-agent",
+    label: "Load key into ssh-agent",
+    async run(plan, ctx) {
+      if (plan.noAgent) {
+        ctx.emit({ type: "info", text: "Skipped (--no-agent)" });
+        return;
+      }
+      const running = await ensureAgentRunning(ctx.exec, ctx.env);
+      if (!running) {
+        ctx.emit({ type: "warn", text: "ssh-agent unavailable — key will load on first use via AddKeysToAgent" });
+        return;
+      }
+      try {
+        await addKeyToAgent(ctx.exec, ctx.os, expandTilde(plan.keyPath, ctx.paths.home));
+        ctx.emit({ type: "info", text: ctx.os.hasKeychain ? "Key in agent (persisted to Keychain)" : "Key in agent" });
+      } catch (err) {
+        // non-fatal: AddKeysToAgent yes in the config covers first use
+        ctx.emit({ type: "warn", text: (err as Error).message });
+      }
+    },
+  },
+  {
     id: "save-profile",
     label: "Record profile",
     async run(plan, ctx) {
@@ -169,9 +208,18 @@ export const setupSteps: SetupStep[] = [
         keyType: plan.keyType,
         isDefault: plan.isDefault,
         createdAt: new Date().toISOString(),
-        gitDirs: [],
+        gitDirs: plan.dir ? [plan.dir] : [],
       };
       await saveManifest(ctx.paths.manifest, upsertProfile(manifest, profile));
+    },
+  },
+  {
+    id: "link-gitconfig",
+    label: "Bind directory to this git identity",
+    async run(plan, ctx) {
+      if (!plan.dir) return;
+      await linkGitIdentity(ctx.exec, ctx.paths.home, { email: plan.email, keyPath: plan.keyPath }, plan.dir);
+      ctx.emit({ type: "info", text: `Repos under ${plan.dir} now commit as ${plan.email} using this key` });
     },
   },
   {
@@ -180,6 +228,23 @@ export const setupSteps: SetupStep[] = [
     async run(plan, ctx) {
       const absKeyPath = expandTilde(plan.keyPath, ctx.paths.home);
       const publicKey = await readPublicKey(absKeyPath);
+
+      if (plan.token && plan.provider.api) {
+        const title = `xpssh:${plan.profileId}@${hostname()}`;
+        const outcome = await uploadKey(plan.provider, plan.token, title, publicKey, ctx.fetch);
+        ctx.emit({ type: outcome.ok ? "success" : "warn", text: outcome.message });
+        if (outcome.ok) {
+          const manifest = await loadManifest(ctx.paths.manifest);
+          const profile = manifest.profiles.find((p) => p.id === plan.profileId);
+          if (profile) {
+            profile.uploaded = { via: "api", at: new Date().toISOString() };
+            await saveManifest(ctx.paths.manifest, manifest);
+          }
+          return; // no clipboard/browser needed
+        }
+        // fall through to manual delivery when the API rejects
+      }
+
       if (!plan.noClipboard) {
         const copied = await copyToClipboard(ctx.exec, ctx.os, publicKey);
         ctx.emit(
@@ -242,15 +307,19 @@ export async function executeSetupPipeline(plan: SetupPlan, ctx: CommandContext)
 export const setupCommand = defineCommand<SetupArgs>({
   name: "setup",
   summary: "Generate a key and wire up SSH for a git provider",
-  usage: "xpssh setup <provider> [-n <name>] [-e <email>] [-t ed25519|rsa] [--default] [--force] [--no-browser] [--no-clipboard] [-y]",
+  usage:
+    "xpssh setup <provider> [-n <name>] [-e <email>] [-t ed25519|rsa] [--default] [--token <tok>] [--dir <path>] [--force] [--no-browser] [--no-clipboard] [--no-agent] [-y]",
   flags: [
     { name: "name", short: "n", type: "string", description: "profile name (work, personal, ...)", valueHint: "<name>" },
     { name: "email", short: "e", type: "string", description: "email for the key comment", valueHint: "<email>" },
     { name: "type", short: "t", type: "string", description: "key algorithm (default: provider preference)", valueHint: "ed25519|rsa" },
     { name: "default", type: "boolean", description: "make this the bare-host default profile" },
+    { name: "token", type: "string", description: "API token — upload the key directly, skip browser", valueHint: "<token>" },
+    { name: "dir", type: "string", description: "bind a directory to this identity (git includeIf)", valueHint: "<path>" },
     { name: "force", type: "boolean", description: "overwrite an existing key file" },
     { name: "no-browser", type: "boolean", description: "don't open the provider settings page" },
     { name: "no-clipboard", type: "boolean", description: "don't copy the public key" },
+    { name: "no-agent", type: "boolean", description: "don't load the key into ssh-agent" },
     { name: "yes", short: "y", type: "boolean", description: "never prompt (missing inputs become errors)" },
   ],
   parse(positionals, values) {
@@ -263,9 +332,12 @@ export const setupCommand = defineCommand<SetupArgs>({
       email: values["email"] as string | undefined,
       keyType: values["type"] as KeyType | undefined,
       default: values["default"] === true ? true : undefined,
+      token: values["token"] as string | undefined,
+      dir: values["dir"] as string | undefined,
       force: values["force"] === true,
       noBrowser: values["no-browser"] === true,
       noClipboard: values["no-clipboard"] === true,
+      noAgent: values["no-agent"] === true,
     };
   },
   async run(args, ctx) {

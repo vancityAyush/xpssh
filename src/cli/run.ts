@@ -33,6 +33,7 @@ function buildTerminalContext(yes: boolean): CommandContext {
 
   return {
     exec: realExec,
+    fetch: globalThis.fetch,
     env: process.env,
     paths: resolvePaths(process.env),
     os: resolveOs(),

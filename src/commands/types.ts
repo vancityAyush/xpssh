@@ -17,6 +17,8 @@ export interface SelectChoice<T> {
  */
 export interface CommandContext {
   exec: ExecFn;
+  /** injectable for tests; commands use this instead of global fetch */
+  fetch: typeof fetch;
   env: Record<string, string | undefined>;
   paths: Paths;
   os: OsInfo;

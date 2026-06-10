@@ -102,7 +102,15 @@ describe("setup command", () => {
 
     // pipeline step events emitted in order
     const steps = ctx.events.filter((e) => e.type === "step" && e.status === "done").map((e) => (e as { id: string }).id);
-    expect(steps).toEqual(["generate-key", "write-ssh-config", "save-profile", "deliver-pubkey", "test-connection"]);
+    expect(steps).toEqual([
+      "generate-key",
+      "write-ssh-config",
+      "add-to-agent",
+      "save-profile",
+      "link-gitconfig",
+      "deliver-pubkey",
+      "test-connection",
+    ]);
   });
 
   test("second profile for same provider gets host alias, not default", async () => {

@@ -29,6 +29,8 @@ export interface FakeCtxOptions {
   selectIndex?: number;
   yes?: boolean;
   platform?: NodeJS.Platform;
+  /** scripted fetch responses, consumed in order; default = 200 {} */
+  fetchResponses?: Array<{ status: number; body: unknown }>;
 }
 
 /** CommandContext against a tmpdir HOME with a scripted exec — no real processes, no real ~/.ssh. */
@@ -52,12 +54,22 @@ export async function makeFakeCtx(options: FakeCtxOptions = {}): Promise<FakeCtx
     return { code: 0, stdout: "", stderr: "", ...scripted.result };
   };
 
+  const fetchResponses = [...(options.fetchResponses ?? [])];
+  const fakeFetch = (async (_input: string | URL | Request, _init?: RequestInit) => {
+    const next = fetchResponses.shift() ?? { status: 200, body: {} };
+    return new Response(JSON.stringify(next.body), {
+      status: next.status,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+
   return {
     home,
     events,
     execCalls,
     script,
     exec,
+    fetch: fakeFetch,
     env,
     paths: resolvePaths(env),
     os: resolveOs(options.platform ?? "darwin"),
