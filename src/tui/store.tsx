@@ -3,7 +3,7 @@ import type { CommandEvent, SelectChoice } from "../commands/types.js";
 import type { ProfileRow } from "../commands/list.js";
 import type { SetupArgs } from "../commands/setup.js";
 
-export type Screen = "dashboard" | "keys" | "setup" | "agent" | "help";
+export type Screen = "dashboard" | "keys" | "setup" | "test" | "agent" | "help";
 export type FocusZone = "screen" | "bar";
 
 /** A prompt a running command is waiting on; PromptOverlay renders it and calls resolve. */

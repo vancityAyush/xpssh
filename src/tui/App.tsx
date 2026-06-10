@@ -10,10 +10,17 @@ import { PromptOverlay } from "./components/PromptOverlay.js";
 import { Dashboard } from "./screens/Dashboard.js";
 import { KeyManager } from "./screens/KeyManager.js";
 import { SetupWizard } from "./screens/SetupWizard.js";
+import { Tester } from "./screens/Tester.js";
 import { AgentScreen } from "./screens/AgentScreen.js";
 import { HelpScreen } from "./screens/HelpScreen.js";
 
-const SCREEN_KEYS: Record<string, Screen> = { "1": "dashboard", "2": "keys", "3": "setup", "4": "agent" };
+const SCREEN_KEYS: Record<string, Screen> = {
+  "1": "dashboard",
+  "2": "keys",
+  "3": "setup",
+  "4": "test",
+  "5": "agent",
+};
 
 function Shell() {
   const { state, dispatch } = useStore();
@@ -50,6 +57,7 @@ function Shell() {
         {state.screen === "dashboard" && <Dashboard />}
         {state.screen === "keys" && <KeyManager />}
         {state.screen === "setup" && <SetupWizard key={JSON.stringify(state.setupPrefill)} />}
+        {state.screen === "test" && <Tester />}
         {state.screen === "agent" && <AgentScreen />}
         {state.screen === "help" && <HelpScreen />}
       </Box>
@@ -57,7 +65,7 @@ function Shell() {
       <PromptOverlay />
       <CommandBar />
       <Box paddingX={1}>
-        <Text dimColor>/ command · 1 dashboard · 2 keys · 3 setup · 4 agent · ? help · ctrl+l clear · q quit</Text>
+        <Text dimColor>/ command · 1 dash · 2 keys · 3 setup · 4 test · 5 agent · ? help · ctrl+l clear · q quit</Text>
       </Box>
     </Box>
   );

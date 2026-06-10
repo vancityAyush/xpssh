@@ -26,7 +26,7 @@ export function Dashboard() {
         options={[
           { label: "➕ Setup a new SSH key", value: "screen:setup" },
           { label: "🗂  Manage keys", value: "screen:keys" },
-          { label: "🔌 Test all connections", value: "test --all" },
+          { label: "🔌 Test connections", value: "screen:test" },
           { label: "🔑 SSH agent", value: "screen:agent" },
           { label: "❓ Help", value: "screen:help" },
         ]}
