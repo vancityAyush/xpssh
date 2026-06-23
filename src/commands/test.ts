@@ -1,6 +1,7 @@
 import { defineCommand, UsageError } from "./types.js";
 import { findProfile, loadManifest, saveManifest } from "../core/manifest.js";
-import { testConnection } from "../services/sshTest.js";
+import { testConnection, testCustomConnection } from "../services/sshTest.js";
+import type { Profile } from "../core/profile.js";
 
 interface TestArgs {
   profile?: string;
@@ -46,10 +47,14 @@ export const testCommand = defineCommand<TestArgs>({
 
     let allOk = true;
     for (const profile of targets) {
-      ctx.emit({ type: "step", id: profile.id, label: `ssh -T git@${profile.alias}`, status: "start" });
-      const result = await testConnection(ctx.exec, profile.alias);
+      const isCustom = profile.provider === "custom";
+      const label = isCustom ? `ssh ${profile.alias} exit 0` : `ssh -T git@${profile.alias}`;
+      ctx.emit({ type: "step", id: profile.id, label, status: "start" });
+      const result = isCustom
+        ? await testCustomConnection(ctx.exec, profile.alias)
+        : await testConnection(ctx.exec, profile.alias);
       profile.lastTest = { ok: result.ok, at: new Date().toISOString(), message: result.message };
-      ctx.emit({ type: "step", id: profile.id, label: `ssh -T git@${profile.alias}`, status: result.ok ? "done" : "fail" });
+      ctx.emit({ type: "step", id: profile.id, label, status: result.ok ? "done" : "fail" });
       ctx.emit({ type: result.ok ? "success" : "error", text: `${profile.id}: ${result.message}` });
       if (!result.ok) allOk = false;
     }
