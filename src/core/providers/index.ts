@@ -83,6 +83,16 @@ export const PROVIDERS: Provider[] = [
     settingsUrl: "https://dev.azure.com/_usersSettings/keys",
     api: null,
   },
+  {
+    id: "custom",
+    label: "Custom / EC2 / VM",
+    aliases: ["ec2", "vm", "server"],
+    host: "",        // overridden per-profile via customHost prompt
+    sshUser: "ubuntu", // sensible EC2 default; overridden via --user or prompt
+    keyType: "ed25519",
+    settingsUrl: "",
+    api: null,
+  },
 ];
 
 export function getProvider(idOrAlias: string): Provider | undefined {

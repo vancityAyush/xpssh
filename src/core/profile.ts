@@ -24,6 +24,10 @@ export interface Profile {
   /** directories bound to this identity via git includeIf */
   gitDirs: string[];
   uploaded?: { via: "api" | "manual"; at: string };
+  /** custom provider only: actual hostname/IP for HostName directive */
+  customHost?: string;
+  /** custom provider only: SSH user (e.g. ubuntu, ec2-user) */
+  customUser?: string;
 }
 
 /** Lowercase, [a-z0-9-] only — used for profile names and ids. */

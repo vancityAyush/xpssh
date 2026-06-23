@@ -5,7 +5,7 @@ import type { Profile } from "./profile.js";
 
 const profileSchema = z.object({
   id: z.string().min(1),
-  provider: z.enum(["github", "gitlab", "bitbucket", "azure"]),
+  provider: z.enum(["github", "gitlab", "bitbucket", "azure", "custom"]),
   name: z.string().min(1),
   email: z.string(),
   alias: z.string().min(1),
@@ -20,6 +20,8 @@ const profileSchema = z.object({
   uploaded: z
     .object({ via: z.enum(["api", "manual"]), at: z.string() })
     .optional(),
+  customHost: z.string().optional(),
+  customUser: z.string().optional(),
 });
 
 const manifestSchema = z.object({

@@ -16,7 +16,7 @@ import { loadSshConfig, saveSshConfig } from "../services/sshconfigFile.js";
 import { generateKeyPair, readPublicKey } from "../services/keygen.js";
 import { copyToClipboard } from "../services/clipboard.js";
 import { openInBrowser } from "../services/browser.js";
-import { testConnection } from "../services/sshTest.js";
+import { testConnection, testCustomConnection } from "../services/sshTest.js";
 import { addKeyToAgent, ensureAgentRunning } from "../services/agent.js";
 import { linkGitIdentity } from "../services/gitconfig.js";
 import { uploadKey } from "../services/api.js";
@@ -36,6 +36,10 @@ export interface SetupArgs {
   token?: string;
   /** directory to bind to this identity via git includeIf */
   dir?: string;
+  /** custom provider: hostname or IP of the remote host */
+  host?: string;
+  /** custom provider: SSH user on the remote host (default: ubuntu) */
+  user?: string;
 }
 
 /** Fully-resolved inputs for the pipeline; the wizard fills this through its own UI. */
@@ -55,6 +59,9 @@ export interface SetupPlan {
   force: boolean;
   token?: string;
   dir?: string;
+  /** custom provider only */
+  customHost?: string;
+  customUser?: string;
 }
 
 export async function resolveSetupPlan(args: SetupArgs, ctx: CommandContext): Promise<SetupPlan> {
@@ -103,6 +110,34 @@ export async function resolveSetupPlan(args: SetupArgs, ctx: CommandContext): Pr
   const profileId = deriveProfileId(provider.id, name);
   // token: explicit flag wins, then the provider's env var
   const token = args.token ?? (provider.api ? ctx.env[provider.api.tokenEnvVar] : undefined);
+
+  // Custom provider: prompt for host and user if not supplied via flags.
+  let customHost: string | undefined;
+  let customUser: string | undefined;
+  if (provider.id === "custom") {
+    customHost = args.host;
+    if (!customHost) {
+      if (ctx.yes) throw new UsageError("Missing --host (required for custom provider with -y)");
+      customHost = await ctx.promptText("Remote host (IP or hostname, e.g. 13.206.50.121 or brain.vancity.in)");
+    }
+    if (!customHost) throw new UsageError("Host is required for the custom provider");
+
+    customUser = args.user;
+    if (!customUser) {
+      if (ctx.yes) {
+        customUser = "ubuntu";
+      } else {
+        customUser = await ctx.promptText("SSH user on the remote host", { defaultValue: "ubuntu" });
+      }
+    }
+  }
+
+  // For custom provider the alias is just the sanitized name (e.g. "brain"), not host-derived.
+  const alias =
+    provider.id === "custom"
+      ? sanitizeName(name)
+      : deriveAlias(provider.host, name, isDefault);
+
   return {
     provider,
     name,
@@ -110,7 +145,7 @@ export async function resolveSetupPlan(args: SetupArgs, ctx: CommandContext): Pr
     keyType,
     isDefault,
     profileId,
-    alias: deriveAlias(provider.host, name, isDefault),
+    alias,
     keyPath: deriveKeyPath(provider.id, name),
     noBrowser: args.noBrowser,
     noClipboard: args.noClipboard,
@@ -118,6 +153,8 @@ export async function resolveSetupPlan(args: SetupArgs, ctx: CommandContext): Pr
     force: args.force,
     token,
     dir: args.dir,
+    customHost,
+    customUser,
   };
 }
 
@@ -162,8 +199,8 @@ export const setupSteps: SetupStep[] = [
       const { segments: next, action } = upsertBlock(segments, {
         id: plan.profileId,
         alias: plan.alias,
-        hostName: plan.provider.host,
-        user: plan.provider.sshUser,
+        hostName: plan.customHost ?? plan.provider.host,
+        user: plan.customUser ?? plan.provider.sshUser,
         identityFile: plan.keyPath,
         useKeychain: ctx.os.hasKeychain,
       });
@@ -209,6 +246,8 @@ export const setupSteps: SetupStep[] = [
         isDefault: plan.isDefault,
         createdAt: new Date().toISOString(),
         gitDirs: plan.dir ? [plan.dir] : [],
+        ...(plan.customHost ? { customHost: plan.customHost } : {}),
+        ...(plan.customUser ? { customUser: plan.customUser } : {}),
       };
       await saveManifest(ctx.paths.manifest, upsertProfile(manifest, profile));
     },
@@ -228,6 +267,23 @@ export const setupSteps: SetupStep[] = [
     async run(plan, ctx) {
       const absKeyPath = expandTilde(plan.keyPath, ctx.paths.home);
       const publicKey = await readPublicKey(absKeyPath);
+
+      // Custom provider: no settings URL — show authorized_keys instructions instead.
+      if (plan.provider.id === "custom") {
+        if (!plan.noClipboard) {
+          const copied = await copyToClipboard(ctx.exec, ctx.os, publicKey);
+          ctx.emit(
+            copied
+              ? { type: "success", text: "Public key copied to clipboard" }
+              : { type: "warn", text: `Clipboard unavailable — copy it yourself: cat ${plan.keyPath}.pub` },
+          );
+        }
+        ctx.emit({
+          type: "info",
+          text: `Add the key to the remote host:\n  ssh-copy-id -i ${plan.keyPath}.pub ${plan.customUser ?? "ubuntu"}@${plan.customHost}\n  or: echo '<paste key>' >> ~/.ssh/authorized_keys`,
+        });
+        return;
+      }
 
       if (plan.token && plan.provider.api) {
         const title = `xpssh:${plan.profileId}@${hostname()}`;
@@ -269,19 +325,27 @@ export const setupSteps: SetupStep[] = [
     id: "test-connection",
     label: "Test SSH connection",
     async run(plan, ctx) {
-      const ready = await ctx.confirm(`Key added on ${plan.provider.label}? Test the connection now?`);
-      if (!ready) {
-        ctx.emit({ type: "info", text: `Skipped — run \`xpssh test ${plan.profileId}\` when ready` });
-        return;
+      let result: { ok: boolean; message: string };
+
+      if (plan.provider.id === "custom") {
+        // For custom hosts the key is already on the server (user just added it),
+        // so test immediately without asking.
+        result = await testCustomConnection(ctx.exec, plan.alias);
+      } else {
+        const ready = await ctx.confirm(`Key added on ${plan.provider.label}? Test the connection now?`);
+        if (!ready) {
+          ctx.emit({ type: "info", text: `Skipped — run \`xpssh test ${plan.profileId}\` when ready` });
+          return;
+        }
+        result = await testConnection(ctx.exec, plan.alias, plan.provider.sshUser);
       }
-      const result = await testConnection(ctx.exec, plan.alias, plan.provider.sshUser);
+
       const manifest = await loadManifest(ctx.paths.manifest);
       const profile = manifest.profiles.find((p) => p.id === plan.profileId);
       if (profile) {
         profile.lastTest = { ok: result.ok, at: new Date().toISOString(), message: result.message };
         await saveManifest(ctx.paths.manifest, manifest);
       }
-      // Non-fatal: the user may simply not have pasted the key yet.
       ctx.emit(
         result.ok
           ? { type: "success", text: result.message }
@@ -306,9 +370,9 @@ export async function executeSetupPipeline(plan: SetupPlan, ctx: CommandContext)
 
 export const setupCommand = defineCommand<SetupArgs>({
   name: "setup",
-  summary: "Generate a key and wire up SSH for a git provider",
+  summary: "Generate a key and wire up SSH for a git provider or custom host",
   usage:
-    "xpssh setup <provider> [-n <name>] [-e <email>] [-t ed25519|rsa] [--default] [--token <tok>] [--dir <path>] [--force] [--no-browser] [--no-clipboard] [--no-agent] [-y]",
+    "xpssh setup <provider> [-n <name>] [-e <email>] [-t ed25519|rsa] [--default] [--token <tok>] [--dir <path>] [--host <host>] [--user <user>] [--force] [--no-browser] [--no-clipboard] [--no-agent] [-y]",
   flags: [
     { name: "name", short: "n", type: "string", description: "profile name (work, personal, ...)", valueHint: "<name>" },
     { name: "email", short: "e", type: "string", description: "email for the key comment", valueHint: "<email>" },
@@ -316,6 +380,8 @@ export const setupCommand = defineCommand<SetupArgs>({
     { name: "default", type: "boolean", description: "make this the bare-host default profile" },
     { name: "token", type: "string", description: "API token — upload the key directly, skip browser", valueHint: "<token>" },
     { name: "dir", type: "string", description: "bind a directory to this identity (git includeIf)", valueHint: "<path>" },
+    { name: "host", type: "string", description: "custom provider: remote hostname or IP", valueHint: "<host>" },
+    { name: "user", type: "string", description: "custom provider: SSH user on the remote host (default: ubuntu)", valueHint: "<user>" },
     { name: "force", type: "boolean", description: "overwrite an existing key file" },
     { name: "no-browser", type: "boolean", description: "don't open the provider settings page" },
     { name: "no-clipboard", type: "boolean", description: "don't copy the public key" },
@@ -334,6 +400,8 @@ export const setupCommand = defineCommand<SetupArgs>({
       default: values["default"] === true ? true : undefined,
       token: values["token"] as string | undefined,
       dir: values["dir"] as string | undefined,
+      host: values["host"] as string | undefined,
+      user: values["user"] as string | undefined,
       force: values["force"] === true,
       noBrowser: values["no-browser"] === true,
       noClipboard: values["no-clipboard"] === true,

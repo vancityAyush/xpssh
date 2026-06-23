@@ -1,4 +1,4 @@
-export type ProviderId = "github" | "gitlab" | "bitbucket" | "azure";
+export type ProviderId = "github" | "gitlab" | "bitbucket" | "azure" | "custom";
 export type KeyType = "ed25519" | "rsa";
 
 export interface ProviderApi {
